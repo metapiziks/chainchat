@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>THE GRID — Tezos Lobby</title>
+<script src="https://unpkg.com/@tezos-x/octez.connect-dapp@5.0.0-beta.6/dist/octez.connect.dapp.min.js"></script>
+<link rel="preconnect" href="https://api.tzkt.io">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#03050a; --bg2:#060b14;
+    --metal-1:#eef6fb; --metal-2:#93a8bb; --metal-3:#232c37;
+    --neon-cyan:#3ef1ff; --neon-cyan-dim:rgba(62,241,255,.45);
+    --neon-amber:#ffab3d; --neon-amber-dim:rgba(255,171,61,.45);
+    --neon-magenta:#ff4fe0; --neon-magenta-dim:rgba(255,79,224,.45);
+    --neon-lime:#8dff5c; --neon-lime-dim:rgba(141,255,92,.45);
+    --ink:#eaf6ff; --dim:#7fa0b3; --danger:#ff5d6c;
+    --panel:linear-gradient(160deg,#0d1620,#060a11 70%);
+    --panel-border:rgba(62,241,255,.28);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    background:var(--bg); color:var(--ink); font-family:'Rajdhani',sans-serif;
+    overflow:hidden; -webkit-font-smoothing:antialiased; font-size:16px;
+  }
+  .orb{font-family:'Orbitron',sans-serif;}
+  .mono{font-family:'Share Tech Mono',monospace;}
+  ::selection{background:var(--neon-cyan-dim);}
+  button, input{font-family:inherit;}
+  a{color:var(--neon-cyan);}
+
+  /* ---------- APP ROOT / SCREEN SWITCH ---------- */
+  #app{position:fixed; inset:0;}
+  .screen{position:absolute; inset:0; display:none; flex-direction:column;}
+  .screen.active{display:flex;}
+
+  /* ---------- TRON BACKDROP (shared) ---------- */
+  .backdrop{position:absolute; inset:0; overflow:hidden; z-index:0; background:
+    radial-gradient(ellipse at 50% 18%, rgba(30,70,95,.35), transparent 55%),
+    linear-gradient(180deg, var(--bg) 0%, var(--bg2) 55%, #010204 100%);
+  }
+  .scanlines{position:absolute; inset:0; pointer-events:none; opacity:.5;
+    background:repeating-linear-gradient(180deg, rgba(255,255,255,.025) 0px, rgba(255,255,255,.025) 1px, transparent 1px, transparent 3px);
+    mix-blend-mode:overlay;
+  }
+  .vignette{position:absolute; inset:0; pointer-events:none;
+    background:radial-gradient(ellipse at 50% 45%, transparent 45%, rgba(0,0,0,.55) 100%);
+  }
+  .floor{position:absolute; left:0; right:0; bottom:0; height:56%;
+    background:
+      repeating-linear-gradient(90deg, var(--neon-cyan-dim) 0 1px, transparent 1px 68px),
+      repeating-linear-gradient(0deg, rgba(62,241,255,.22) 0 1px, transparent 1px 44px),
+      linear-gradient(180deg, rgba(4,10,16,0) 0%, rgba(2,6,10,.9) 100%);
+    transform:perspective(320px) rotateX(62deg); transform-origin:bottom;
+    animation:floorMove 6s linear infinite;
+    opacity:.55;
+  }
+  @keyframes floorMove{ from{background-position:0 0, 0 0, 0 0;} to{background-position:0 -88px, 0 -88px, 0 0;} }
+  .horizon{position:absolute; left:0; right:0; bottom:44%; height:2px;
+    background:linear-gradient(90deg, transparent, var(--neon-cyan) 20%, var(--metal-1) 50%, var(--neon-cyan) 80%, transparent);
+    box-shadow:0 0 18px 2px var(--neon-cyan-dim), 0 0 60px 10px rgba(62,241,255,.15);
+    filter:blur(.2px);
+  }
+  .streaks{position:absolute; inset:0; overflow:hidden;}
+  .streak{position:absolute; height:2px; border-radius:2px; top:var(--sy);
+    left:-30%; width:34%;
+    background:linear-gradient(90deg, transparent, var(--metal-1) 35%, var(--sc) 60%, transparent);
+    box-shadow:0 0 10px 1px var(--sc), 0 0 22px 4px var(--sc);
+    animation:streakMove var(--sd) linear infinite;
+    animation-delay:var(--sdelay);
+    opacity:.85;
+  }
+  @keyframes streakMove{ from{transform:translateX(0);} to{transform:translateX(340vw);} }
+
+  /* ---------- TOPBAR ---------- */
+  .topbar{position:relative; z-index:5; display:flex; align-items:center; justify-content:space-between;
+    padding:.85rem 1.4rem; border-bottom:1px solid rgba(62,241,255,.18);
+    background:rgba(3,6,11,.55); backdrop-filter:blur(6px);
+  }
+  .brand{font-size:1.15rem; font-weight:900; letter-spacing:.22em; color:var(--metal-1);
+    text-shadow:0 0 10px var(--neon-cyan-dim);}
+  .brand span{color:var(--neon-cyan); text-shadow:0 0 12px var(--neon-cyan), 0 0 30px var(--neon-cyan-dim);}
+  .topbar-right{display:flex; align-items:center; gap:.6rem;}
+
+  /* ---------- BUTTONS / FIELDS ---------- */
+  .btn{font-weight:700; font-size:.85rem; letter-spacing:.06em; text-transform:uppercase;
+    padding:.55rem 1.15rem; border-radius:3px; border:1px solid var(--panel-border);
+    background:linear-gradient(160deg, rgba(147,168,187,.12), rgba(6,10,17,.4));
+    color:var(--ink); cursor:pointer; transition:all .18s; white-space:nowrap;
+  }
+  .btn:hover:not(:disabled){border-color:var(--neon-cyan); box-shadow:0 0 14px var(--neon-cyan-dim); transform:translateY(-1px);}
+  .btn:disabled{opacity:.35; cursor:not-allowed;}
+  .btn-primary{background:linear-gradient(160deg, rgba(62,241,255,.22), rgba(6,16,22,.5)); border-color:var(--neon-cyan); color:var(--metal-1);
+    box-shadow:0 0 10px rgba(62,241,255,.2);}
+  .btn-primary:hover:not(:disabled){box-shadow:0 0 22px var(--neon-cyan-dim);}
+  .btn-danger{border-color:var(--danger); color:#ffb3ba;}
+  .btn-sm{font-size:.72rem; padding:.35rem .8rem;}
+  .field{background:rgba(4,9,15,.7); border:1px solid var(--panel-border); border-radius:3px; color:var(--ink);
+    padding:.55rem .8rem; font-size:.92rem; width:100%; font-family:'Share Tech Mono',monospace;}
+  .field:focus{outline:none; border-color:var(--neon-cyan); box-shadow:0 0 10px var(--neon-cyan-dim);}
+  .field::placeholder{color:var(--dim);}
+  .wallet-chip{display:flex; align-items:center; gap:.5rem; border:1px solid var(--panel-border); border-radius:20px;
+    padding:.3rem .9rem .3rem .5rem; background:rgba(147,168,187,.06);}
+  .wdot{width:7px; height:7px; border-radius:50%; background:var(--neon-lime); box-shadow:0 0 7px var(--neon-lime);}
+
+  /* ---------- CONNECT SCREEN ---------- */
+  #screen-connect{align-items:center; justify-content:center;}
+  .connect-wrap{position:relative; z-index:5; width:100%; max-width:460px; padding:2rem 1.6rem; margin:0 1rem;
+    background:var(--panel); border:1px solid var(--panel-border); border-radius:10px;
+    box-shadow:0 0 40px rgba(62,241,255,.08), inset 0 0 60px rgba(62,241,255,.03); text-align:center;}
+  .connect-wrap h1{font-family:'Orbitron',sans-serif; font-size:2.1rem; font-weight:900; letter-spacing:.16em;
+    color:var(--metal-1); text-shadow:0 0 16px var(--neon-cyan-dim);}
+  .connect-wrap h1 span{color:var(--neon-cyan); text-shadow:0 0 18px var(--neon-cyan), 0 0 46px var(--neon-cyan-dim);}
+  .tagline{color:var(--dim); font-size:.92rem; margin:.5rem 0 1.6rem; letter-spacing:.02em;}
+  .connect-opt{display:flex; align-items:center; gap:.7rem; width:100%; padding:.75rem 1rem; border-radius:5px;
+    border:1px solid var(--panel-border); background:rgba(4,9,15,.55); color:var(--ink); cursor:pointer;
+    font-size:.95rem; font-weight:600; margin-bottom:.55rem; transition:all .16s; text-align:left;}
+  .connect-opt:hover{border-color:var(--neon-cyan); box-shadow:0 0 12px var(--neon-cyan-dim); transform:translateY(-1px);}
+  .connect-opt .ic{font-size:1.1rem; filter:drop-shadow(0 0 4px var(--neon-cyan-dim));}
+  .or-div{font-size:.75rem; color:var(--dim); text-align:center; margin:.8rem 0 .5rem; letter-spacing:.08em; text-transform:uppercase;}
+  .addr-row{display:flex; gap:.5rem;}
+  .connect-status{font-size:.82rem; color:var(--neon-cyan); min-height:1.3rem; margin-top:.7rem;}
+  .connect-status.err{color:var(--danger);}
+
+  /* ---------- SETUP SCREEN ---------- */
+  #screen-setup{align-items:center; justify-content:center; overflow-y:auto;}
+  .setup-wrap{position:relative; z-index:5; width:100%; max-width:640px; padding:2rem; margin:2rem 1rem;
+    background:var(--panel); border:1px solid var(--panel-border); border-radius:10px; box-shadow:0 0 40px rgba(62,241,255,.08);}
+  .setup-wrap h2{font-family:'Orbitron',sans-serif; font-size:1.3rem; letter-spacing:.1em; color:var(--metal-1); margin-bottom:.3rem;}
+  .setup-sub{color:var(--dim); font-size:.85rem; margin-bottom:1.2rem;}
+  .setup-label{font-size:.78rem; letter-spacing:.1em; text-transform:uppercase; color:var(--neon-cyan); margin:1rem 0 .4rem;}
+  .avatar-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(84px,1fr)); gap:.6rem; max-height:290px; overflow-y:auto;
+    padding:.3rem; border:1px solid rgba(62,241,255,.12); border-radius:6px; background:rgba(2,5,9,.4);}
+  .avatar-pick{position:relative; aspect-ratio:1/1; border-radius:8px; border:2px solid var(--panel-border); cursor:pointer;
+    overflow:hidden; background:#0a1119; transition:all .15s;}
+  .avatar-pick img{width:100%; height:100%; object-fit:cover; display:block;}
+  .avatar-pick:hover{border-color:var(--neon-cyan);}
+  .avatar-pick.selected{border-color:var(--neon-cyan); box-shadow:0 0 14px var(--neon-cyan-dim);}
+  .avatar-pick.selected::after{content:'✓'; position:absolute; top:2px; right:4px; color:var(--neon-cyan); font-weight:900; text-shadow:0 0 6px #000;}
+  .avatar-fallback{display:flex; align-items:center; justify-content:center; font-family:'Orbitron',sans-serif; font-weight:900;
+    font-size:1.4rem; width:100%; height:100%; color:#04070c;}
+  .setup-empty{font-size:.85rem; color:var(--dim); padding:1rem; text-align:center;}
+  .setup-actions{display:flex; justify-content:flex-end; gap:.6rem; margin-top:1.4rem;}
+
+  /* ---------- LOBBY ---------- */
+  #screen-lobby .arena{position:relative; flex:1; overflow:hidden;}
+  .avatar-node{position:absolute; width:64px; height:64px; transform:translate(-50%,-50%); z-index:2; cursor:pointer;
+    transition:filter .15s;}
+  .avatar-node .ring{position:absolute; inset:-6px; border-radius:50%; border:1.5px solid var(--ac);
+    box-shadow:0 0 10px var(--ac), inset 0 0 8px var(--ac); animation:ringSpin 9s linear infinite; opacity:.85;}
+  .avatar-node .ring::before, .avatar-node .ring::after{content:''; position:absolute; width:5px; height:5px; border-radius:50%;
+    background:var(--ac); box-shadow:0 0 6px var(--ac);}
+  .avatar-node .ring::before{top:-2.5px; left:50%; transform:translateX(-50%);}
+  .avatar-node .ring::after{bottom:-2.5px; left:50%; transform:translateX(-50%);}
+  @keyframes ringSpin{ from{transform:rotate(0);} to{transform:rotate(360deg);} }
+  .avatar-node .disc{position:absolute; inset:4px; border-radius:50%; overflow:hidden; background:#0a1119;
+    border:2px solid var(--metal-2); box-shadow:0 0 16px var(--ac), 0 0 3px #000 inset;}
+  .avatar-node .disc img{width:100%; height:100%; object-fit:cover; display:block;}
+  .avatar-node .disc .avatar-fallback{font-size:1.3rem;}
+  .avatar-node .trail{position:absolute; inset:-10px; border-radius:50%; background:radial-gradient(circle, var(--ac) 0%, transparent 70%);
+    opacity:.18; filter:blur(4px); z-index:-1;}
+  .avatar-node .nameplate{position:absolute; bottom:100%; left:50%; transform:translateX(-50%) translateY(4px);
+    background:rgba(3,7,12,.92); border:1px solid var(--ac); color:var(--metal-1); font-size:.72rem; font-weight:700;
+    padding:.25rem .55rem; border-radius:4px; white-space:nowrap; opacity:0; pointer-events:none; transition:opacity .15s, transform .15s;
+    box-shadow:0 0 10px var(--ac); margin-bottom:6px;}
+  .avatar-node .nameplate .addr{display:block; font-family:'Share Tech Mono',monospace; font-size:.62rem; color:var(--dim); font-weight:400; margin-top:1px;}
+  .avatar-node:hover .nameplate{opacity:1; transform:translateX(-50%) translateY(0);}
+  .avatar-node:hover .disc{box-shadow:0 0 26px var(--ac);}
+  .avatar-node.self .ring{border-style:dashed;}
+
+  .lobby-footer{position:relative; z-index:5; display:flex; align-items:center; justify-content:space-between;
+    padding:.6rem 1.2rem; border-top:1px solid rgba(62,241,255,.15); background:rgba(3,6,11,.6); font-size:.78rem; color:var(--dim);}
+  .lobby-footer b{color:var(--neon-cyan);}
+
+  /* ---------- CHAT OVERLAY ---------- */
+  .overlay{position:fixed; inset:0; background:rgba(2,4,7,.78); backdrop-filter:blur(5px); z-index:100;
+    display:none; align-items:center; justify-content:center; padding:1rem;}
+  .overlay.open{display:flex;}
+  .chat-panel{width:100%; max-width:440px; height:min(560px,86vh); background:var(--panel); border:1px solid var(--neon-cyan);
+    border-radius:10px; box-shadow:0 0 50px rgba(62,241,255,.25); display:flex; flex-direction:column; overflow:hidden;}
+  .chat-head{display:flex; align-items:center; gap:.6rem; padding:.75rem .9rem; border-bottom:1px solid rgba(62,241,255,.2);
+    background:rgba(62,241,255,.05);}
+  .chat-head .mini-disc{width:34px; height:34px; border-radius:50%; overflow:hidden; border:1.5px solid var(--ac2); box-shadow:0 0 10px var(--ac2); flex-shrink:0; background:#0a1119;}
+  .chat-head .mini-disc img{width:100%; height:100%; object-fit:cover;}
+  .chat-head .who{flex:1; overflow:hidden;}
+  .chat-head .who .nm{font-weight:700; font-size:.95rem; color:var(--metal-1);}
+  .chat-head .who .ad{font-family:'Share Tech Mono',monospace; font-size:.68rem; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .chat-close{background:none; border:none; color:var(--dim); font-size:1.3rem; cursor:pointer; line-height:1; padding:.2rem .4rem;}
+  .chat-close:hover{color:var(--neon-cyan);}
+  .chat-body{flex:1; overflow-y:auto; padding:.8rem; display:flex; flex-direction:column; gap:.5rem;}
+  .msg{max-width:78%; padding:.5rem .7rem; border-radius:9px; font-size:.87rem; line-height:1.35; word-break:break-word;}
+  .msg.me{align-self:flex-end; background:linear-gradient(160deg, rgba(62,241,255,.22), rgba(62,241,255,.08)); border:1px solid var(--neon-cyan-dim); color:var(--metal-1);}
+  .msg.them{align-self:flex-start; background:rgba(147,168,187,.09); border:1px solid rgba(147,168,187,.22); color:var(--ink);}
+  .msg .ts{display:block; font-size:.6rem; color:var(--dim); margin-top:.2rem; font-family:'Share Tech Mono',monospace;}
+  .chat-empty{margin:auto; color:var(--dim); font-size:.82rem; text-align:center; padding:1rem;}
+  .chat-input-row{display:flex; gap:.5rem; padding:.7rem; border-top:1px solid rgba(62,241,255,.2); background:rgba(3,7,12,.5);}
+  .chat-input-row input{flex:1;}
+  .self-note{margin:auto; text-align:center; color:var(--dim); font-size:.85rem; padding:1.4rem;}
+
+  .toast{position:fixed; bottom:1.2rem; left:50%; transform:translateX(-50%); background:rgba(4,9,15,.95);
+    border:1px solid var(--neon-cyan); color:var(--metal-1); padding:.6rem 1.1rem; border-radius:6px; font-size:.85rem;
+    box-shadow:0 0 20px var(--neon-cyan-dim); z-index:400; opacity:0; pointer-events:none; transition:opacity .25s, transform .25s; transform:translateX(-50%) translateY(6px);}
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+  @media(max-width:520px){
+    .connect-wrap, .setup-wrap{padding:1.4rem 1.1rem;}
+    .connect-wrap h1{font-size:1.6rem;}
+    .avatar-node{width:52px; height:52px;}
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ================= CONNECT SCREEN ================= -->
+  <div id="screen-connect" class="screen active">
+    <div class="backdrop"><div class="floor"></div><div class="horizon"></div><div class="streaks" id="streaksConnect"></div><div class="scanlines"></div><div class="vignette"></div></div>
+    <div class="connect-wrap">
+      <h1>THE <span>GRID</span></h1>
+      <div class="tagline">Greetings, Program. Connect your Tezos wallet to enter.</div>
+      <button class="connect-opt" onclick="connectBeacon()"><span class="ic">🔐</span> Temple · AirGap · Beacon</button>
+      <button class="connect-opt" onclick="connectKukai()"><span class="ic">🌐</span> Kukai Social</button>
+      <div class="or-div">or paste an address</div>
+      <div class="addr-row">
+        <input class="field" id="manualAddr" placeholder="tz1…">
+        <button class="btn btn-primary" onclick="connectManual()">Load</button>
+      </div>
+      <div class="connect-status" id="connectStatus"></div>
+    </div>
+  </div>
+
+  <!-- ================= SETUP SCREEN ================= -->
+  <div id="screen-setup" class="screen">
+    <div class="backdrop"><div class="floor"></div><div class="horizon"></div><div class="streaks" id="streaksSetup"></div><div class="scanlines"></div><div class="vignette"></div></div>
+    <div class="setup-wrap">
+      <h2 class="orb">IDENTITY DISC</h2>
+      <div class="setup-sub mono" id="setupWalletLine">—</div>
+
+      <div class="setup-label">Nickname</div>
+      <input class="field" id="nicknameInput" maxlength="20" placeholder="How should the Grid know you?">
+
+      <div class="setup-label">Choose your avatar</div>
+      <div class="avatar-grid" id="avatarGrid">
+        <div class="setup-empty">Scanning wallet for NFTs…</div>
+      </div>
+
+      <div class="setup-actions">
+        <button class="btn" onclick="disconnectWallet()">Back</button>
+        <button class="btn btn-primary" id="enterGridBtn" onclick="enterGrid()">Enter the Grid →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= LOBBY SCREEN ================= -->
+  <div id="screen-lobby" class="screen">
+    <div class="topbar">
+      <div class="brand">THE <span>GRID</span></div>
+      <div class="topbar-right">
+        <div class="wallet-chip"><span class="wdot"></span><span class="mono" id="lobbyWalletChip" style="font-size:.75rem;"></span></div>
+        <button class="btn btn-sm" onclick="openEditIdentity()">✎ Identity</button>
+        <button class="btn btn-sm btn-danger" onclick="disconnectWallet()">Disconnect</button>
+      </div>
+    </div>
+    <div class="arena" id="arena">
+      <div class="backdrop"><div class="floor"></div><div class="horizon"></div><div class="streaks" id="streaksLobby"></div><div class="scanlines"></div><div class="vignette"></div></div>
+      <!-- avatar-node elements injected here -->
+    </div>
+    <div class="lobby-footer">
+      <span><b id="onlineCount">1</b> program(s) on the Grid</span>
+      <span>Hover a disc for identity · Double-click to open a channel</span>
+    </div>
+  </div>
+
+</div>
+
+<!-- ================= CHAT OVERLAY ================= -->
+<div class="overlay" id="chatOverlay">
+  <div class="chat-panel">
+    <div class="chat-head">
+      <div class="mini-disc" id="chatMiniDisc"></div>
+      <div class="who">
+        <div class="nm" id="chatWho">—</div>
+        <div class="ad mono" id="chatWhoAddr">—</div>
+      </div>
+      <button class="chat-close" onclick="closeChat()">✕</button>
+    </div>
+    <div class="chat-body" id="chatBody"></div>
+    <div class="chat-input-row" id="chatInputRow">
+      <input class="field" id="chatInput" placeholder="Transmit a message…" maxlength="500">
+      <button class="btn btn-primary btn-sm" onclick="sendChat()">Send</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* =========================================================================
+   THE GRID — Tezos-gated lobby
+   Wallet connect logic (Beacon / Kukai / manual tz address) and NFT scan
+   are adapted from the user's provided wallet-login flow.
+   Presence + chat are powered by artifact shared storage, so anyone who
+   has this page open shares the same live lobby.
+   ========================================================================= */
+
+const PALETTE = ['#3ef1ff','#ffab3d','#ff4fe0','#8dff5c'];
+const STALE_MS = 90 * 1000;          // presence considered offline after this
+const HEARTBEAT_MS = 20 * 1000;
+const PRESENCE_POLL_MS = 5000;
+const CHAT_POLL_MS = 4000;
+
+let walletAddress = null, connectionSource = null;
+let nftTokens = [];
+let selectedAvatarUrl = null;
+let myNickname = '';
+let myHue = PALETTE[0];
+let _dApp = null, _kukai = null;
+
+let presenceLoopId = null, heartbeatLoopId = null, animLoopId = null, chatPollId = null;
+let peopleCache = {};           // wallet -> {nickname, avatarUrl, wallet, updatedAt, hue}
+let avatarEls = {};             // wallet -> DOM node
+let currentChatWith = null;
+
+/* ---------------- utils ---------------- */
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function short(addr){ return addr ? addr.slice(0,6)+'…'+addr.slice(-4) : ''; }
+function showToast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),2400); }
+function showScreen(id){ document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active')); document.getElementById(id).classList.add('active'); }
+function hashStr(s){ let h=1779033703 ^ s.length; for(let i=0;i<s.length;i++){ h=Math.imul(h ^ s.charCodeAt(i), 3432918353); h=(h<<13)|(h>>>19); } return ()=>{ h=Math.imul(h ^ (h>>>16), 2246822507); h=Math.imul(h ^ (h>>>13), 3266489909); h^= h>>>16; return h>>>0; }; }
+function mulberry32(seed){ return function(){ seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = (t + Math.imul(t ^ t >>> 7, 61 | t)) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function hueFor(wallet){ const s=hashStr(wallet)(); return PALETTE[s % PALETTE.length]; }
+function pairKey(a,b){ return 'chat:' + [a,b].sort().join('__'); }
+function initials(nickname, wallet){ const src = nickname && nickname.trim() ? nickname.trim() : (wallet||'?'); return src.slice(0,2).toUpperCase(); }
+
+/* ---------------- decorative streaks ---------------- */
+function buildStreaks(containerId, count){
+  const el = document.getElementById(containerId);
+  if(!el) return;
+  el.innerHTML='';
+  for(let i=0;i<count;i++){
+    const d=document.createElement('div');
+    d.className='streak';
+    d.style.setProperty('--sy', (Math.random()*90+2)+'%');
+    d.style.setProperty('--sc', PALETTE[i % PALETTE.length]);
+    d.style.setProperty('--sd', (2.2 + Math.random()*3.2).toFixed(2)+'s');
+    d.style.setProperty('--sdelay', (-Math.random()*5).toFixed(2)+'s');
+    el.appendChild(d);
+  }
+}
+buildStreaks('streaksConnect', 10);
+buildStreaks('streaksSetup', 10);
+buildStreaks('streaksLobby', 14);
+
+/* ---------------- wallet connect ---------------- */
+function getDApp(){ if(!_dApp) _dApp = new beacon.DAppClient({ name:'The Grid', network:{ type: beacon.NetworkType.MAINNET } }); return _dApp; }
+async function getKukai(){
+  if(_kukai) return _kukai;
+  const m = await import('https://esm.sh/kukai-embed@0.9.7');
+  _kukai = new m.KukaiEmbed({ net: m.Networks.mainnet });
+  if(!_kukai.initialized) await _kukai.init();
+  return _kukai;
+}
+function setCS(msg, err){ const el=document.getElementById('connectStatus'); el.textContent = msg||''; el.className='connect-status'+(err?' err':''); }
+
+window.connectBeacon = async function(){
+  setCS('Opening wallet…');
+  try{
+    if(typeof beacon === 'undefined') throw new Error('Beacon SDK unavailable');
+    const acc = await getDApp().requestPermissions();
+    if(acc?.address) onConnected(acc.address, 'beacon'); else throw new Error('No account returned');
+  }catch(e){ setCS(/abort|cancel|deny/i.test(e.message||'') ? 'Connection cancelled.' : 'Connection failed. Try pasting your address instead.', true); }
+};
+window.connectKukai = async function(){
+  setCS('Loading social login…');
+  try{
+    if(_kukai){ try{ await _kukai.logout(); }catch(e){} _kukai=null; }
+    const k = await getKukai();
+    setCS('Opening…');
+    const r = await k.login();
+    if(r?.pkh) onConnected(r.pkh, 'kukai'); else throw new Error('No account');
+  }catch(e){ setCS('Social login failed. Try pasting your address instead.', true); }
+};
+window.connectManual = function(){
+  const v = (document.getElementById('manualAddr').value || '').trim();
+  if(!/^tz[123][1-9A-HJ-NP-Za-km-z]{33}$/.test(v)){ setCS('Enter a valid tz1 / tz2 / tz3 address.', true); return; }
+  onConnected(v, 'manual');
+};
+
+async function onConnected(addr, src){
+  walletAddress = addr; connectionSource = src; myHue = hueFor(addr);
+  showToast('Wallet connected: ' + short(addr));
+
+  // resume existing identity if we've set one up before on this device
+  let existing = null;
+  try{ const r = await window.storage.get('my-profile', false); existing = r ? JSON.parse(r.value) : null; }catch(e){ existing = null; }
+  if(existing && existing.wallet === addr){
+    myNickname = existing.nickname || '';
+    selectedAvatarUrl = existing.avatarUrl || null;
+  } else {
+    myNickname = ''; selectedAvatarUrl = null;
+  }
+
+  document.getElementById('setupWalletLine').textContent = addr;
+  document.getElementById('nicknameInput').value = myNickname;
+  showScreen('screen-setup');
+  await scanWallet();
+}
+
+window.disconnectWallet = async function(){
+  stopLoops();
+  if(walletAddress){
+    try{
+      const raw = await window.storage.get('presence-directory', true).catch(()=>null);
+      if(raw){ const dir = JSON.parse(raw.value); delete dir[walletAddress]; await window.storage.set('presence-directory', JSON.stringify(dir), true); }
+    }catch(e){}
+  }
+  try{ if(_dApp) await _dApp.clearActiveAccount(); }catch(e){}
+  walletAddress=null; connectionSource=null; nftTokens=[]; selectedAvatarUrl=null; peopleCache={}; avatarEls={};
+  document.getElementById('arena').querySelectorAll('.avatar-node').forEach(n=>n.remove());
+  setCS('');
+  showScreen('screen-connect');
+};
+
+/* ---------------- NFT scan (tzkt) ---------------- */
+async function scanWallet(){
+  const grid = document.getElementById('avatarGrid');
+  grid.innerHTML = '<div class="setup-empty">Scanning wallet for NFTs…</div>';
+  try{
+    const limit=100; let offset=0; let all=[];
+    while(true){
+      const r = await fetch(`https://api.tzkt.io/v1/tokens/balances?account=${walletAddress}&balance.gt=0&limit=${limit}&offset=${offset}`);
+      if(!r.ok) throw new Error('TzKT ' + r.status);
+      const batch = await r.json();
+      if(!Array.isArray(batch) || !batch.length) break;
+      all = all.concat(batch);
+      if(batch.length < limit) break;
+      offset += limit;
+      if(offset > 4000) break;
+    }
+    nftTokens = all.filter(row=>{
+      if(!row.token) return false;
+      const d = row.token.metadata?.decimals;
+      if(d!==undefined && d!==null && String(d)!=='0') return false;
+      const img = row.token.metadata?.displayUri || row.token.metadata?.thumbnailUri || row.token.metadata?.artifactUri || row.token.metadata?.image;
+      return !!img;
+    }).map(row=>{
+      const meta = row.token.metadata || {};
+      const uri = meta.displayUri || meta.thumbnailUri || meta.artifactUri || meta.image || '';
+      return { name: meta.name || 'Untitled', url: ipfsToHttp(uri) };
+    }).slice(0, 60);
+  }catch(e){
+    nftTokens = [];
+    grid.innerHTML = `<div class="setup-empty">Couldn't reach the Tezos indexer (${esc(e.message)}). You can still use a default disc below.<br><button class="btn btn-sm" style="margin-top:.5rem;" onclick="scanWallet()">Retry</button></div>`;
+    renderAvatarGrid(true);
+    return;
+  }
+  renderAvatarGrid();
+}
+function ipfsToHttp(uri){
+  if(!uri) return '';
+  if(uri.startsWith('ipfs://')) return 'https://ipfs.io/ipfs/' + uri.slice(7);
+  return uri;
+}
+function renderAvatarGrid(keepMessage){
+  const grid = document.getElementById('avatarGrid');
+  grid.innerHTML = '';
+  // default identity-disc option (always available)
+  const def = document.createElement('div');
+  def.className = 'avatar-pick';
+  def.innerHTML = `<div class="avatar-fallback" style="background:linear-gradient(160deg,${myHue},#0a1119);">${esc(initials(myNickname, walletAddress))}</div>`;
+  def.onclick = () => selectAvatar(null, def);
+  grid.appendChild(def);
+
+  nftTokens.forEach(t=>{
+    const d = document.createElement('div');
+    d.className = 'avatar-pick';
+    const img = document.createElement('img');
+    img.src = t.url; img.loading='lazy'; img.alt = esc(t.name);
+    img.onerror = ()=>{ d.remove(); };
+    d.appendChild(img);
+    d.onclick = () => selectAvatar(t.url, d);
+    grid.appendChild(d);
+  });
+
+  if(nftTokens.length === 0 && !keepMessage){
+    const note = document.createElement('div');
+    note.className = 'setup-empty';
+    note.style.gridColumn = '1 / -1';
+    note.textContent = 'No NFTs found in this wallet — pick the default identity disc above, or add art to your wallet and rescan.';
+    grid.appendChild(note);
+  }
+
+  // restore prior selection if it still matches an option
+  let matched = false;
+  grid.querySelectorAll('.avatar-pick').forEach(el=>{
+    const img = el.querySelector('img');
+    if(selectedAvatarUrl && img && img.src === selectedAvatarUrl){ el.classList.add('selected'); matched = true; }
+  });
+  if(!matched){ selectedAvatarUrl = null; def.classList.add('selected'); }
+}
+function selectAvatar(url, el){
+  selectedAvatarUrl = url;
+  document.querySelectorAll('.avatar-pick').forEach(n=>n.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+/* ---------------- setup -> enter grid ---------------- */
+window.enterGrid = async function(){
+  const nickInput = document.getElementById('nicknameInput').value.trim();
+  myNickname = nickInput.slice(0,20);
+  const btn = document.getElementById('enterGridBtn');
+  btn.disabled = true; btn.textContent = 'Entering…';
+  try{
+    await window.storage.set('my-profile', JSON.stringify({ wallet: walletAddress, nickname: myNickname, avatarUrl: selectedAvatarUrl }), false);
+    await touchPresence();
+    document.getElementById('lobbyWalletChip').textContent = short(walletAddress);
+    showScreen('screen-lobby');
+    startLoops();
+  }catch(e){
+    showToast('Could not save your identity. Try again.');
+  }finally{
+    btn.disabled = false; btn.textContent = 'Enter the Grid →';
+  }
+};
+window.openEditIdentity = function(){
+  document.getElementById('setupWalletLine').textContent = walletAddress;
+  document.getElementById('nicknameInput').value = myNickname;
+  renderAvatarGrid();
+  stopLoops();
+  showScreen('screen-setup');
+};
+
+/* ---------------- presence directory (shared storage) ---------------- */
+async function touchPresence(){
+  try{
+    let dir = {};
+    try{ const r = await window.storage.get('presence-directory', true); dir = r ? JSON.parse(r.value) : {}; }catch(e){ dir = {}; }
+    dir[walletAddress] = { wallet: walletAddress, nickname: myNickname, avatarUrl: selectedAvatarUrl, hue: myHue, updatedAt: Date.now() };
+    await window.storage.set('presence-directory', JSON.stringify(dir), true);
+  }catch(e){ /* best-effort */ }
+}
+async function pollPresence(){
+  try{
+    const r = await window.storage.get('presence-directory', true);
+    const dir = r ? JSON.parse(r.value) : {};
+    const now = Date.now();
+    const live = {};
+    Object.keys(dir).forEach(w=>{ if(now - (dir[w].updatedAt||0) < STALE_MS) live[w] = dir[w]; });
+    if(!live[walletAddress]) live[walletAddress] = { wallet: walletAddress, nickname: myNickname, avatarUrl: selectedAvatarUrl, hue: myHue, updatedAt: now };
+    syncAvatarNodes(live);
+  }catch(e){
+    // no directory yet — just show ourselves
+    syncAvatarNodes({ [walletAddress]: { wallet: walletAddress, nickname: myNickname, avatarUrl: selectedAvatarUrl, hue: myHue, updatedAt: Date.now() } });
+  }
+}
+function syncAvatarNodes(live){
+  peopleCache = live;
+  const arena = document.getElementById('arena');
+  // remove stale
+  Object.keys(avatarEls).forEach(w=>{ if(!live[w]){ avatarEls[w].remove(); delete avatarEls[w]; } });
+  // add / update
+  Object.keys(live).forEach(w=>{
+    const person = live[w];
+    if(!avatarEls[w]){
+      avatarEls[w] = buildAvatarNode(person);
+      arena.appendChild(avatarEls[w]);
+    } else {
+      updateAvatarNode(avatarEls[w], person);
+    }
+  });
+  document.getElementById('onlineCount').textContent = Object.keys(live).length;
+}
+function buildAvatarNode(person){
+  const node = document.createElement('div');
+  node.className = 'avatar-node' + (person.wallet === walletAddress ? ' self' : '');
+  node.style.setProperty('--ac', person.hue || hueFor(person.wallet));
+  node.innerHTML = `
+    <div class="trail"></div>
+    <div class="ring"></div>
+    <div class="disc">${avatarInnerHtml(person)}</div>
+    <div class="nameplate">${nameplateHtml(person)}</div>
+  `;
+  node.addEventListener('dblclick', ()=> openChat(person.wallet));
+  arenaSeed(node, person.wallet);
+  return node;
+}
+function updateAvatarNode(node, person){
+  node.style.setProperty('--ac', person.hue || hueFor(person.wallet));
+  node.querySelector('.disc').innerHTML = avatarInnerHtml(person);
+  node.querySelector('.nameplate').innerHTML = nameplateHtml(person);
+}
+function avatarInnerHtml(person){
+  if(person.avatarUrl){ return `<img src="${esc(person.avatarUrl)}" alt="" onerror="this.parentElement.innerHTML='<div class=&quot;avatar-fallback&quot; style=&quot;background:linear-gradient(160deg,${person.hue||'#3ef1ff'},#0a1119)&quot;>${esc(initials(person.nickname, person.wallet))}</div>'">`; }
+  return `<div class="avatar-fallback" style="background:linear-gradient(160deg,${person.hue||'#3ef1ff'},#0a1119);">${esc(initials(person.nickname, person.wallet))}</div>`;
+}
+function nameplateHtml(person){
+  const label = person.nickname && person.nickname.trim() ? esc(person.nickname) : short(person.wallet);
+  const sub = person.nickname && person.nickname.trim() ? short(person.wallet) : '';
+  return `${label}${sub ? `<span class="addr">${sub}</span>` : ''}`;
+}
+
+/* deterministic slow wander path, seeded per wallet so every viewer renders the same motion */
+const pathParams = {};
+function arenaSeed(node, wallet){
+  const rnd = mulberry32(hashStr(wallet)());
+  pathParams[wallet] = {
+    cx: 22 + rnd()*56, cy: 28 + rnd()*44,
+    ax: 12 + rnd()*16, ay: 10 + rnd()*14,
+    fx: 0.05 + rnd()*0.07, fy: 0.04 + rnd()*0.06,
+    px: rnd()*Math.PI*2, py: rnd()*Math.PI*2,
+  };
+}
+function animateAvatars(){
+  const t = Date.now()/1000;
+  Object.keys(avatarEls).forEach(w=>{
+    const p = pathParams[w]; if(!p) return;
+    const x = Math.min(94, Math.max(6, p.cx + p.ax*Math.sin(p.fx*t + p.px)));
+    const y = Math.min(88, Math.max(14, p.cy + p.ay*Math.cos(p.fy*t + p.py)));
+    const el = avatarEls[w];
+    el.style.left = x + '%';
+    el.style.top = y + '%';
+  });
+  animLoopId = requestAnimationFrame(animateAvatars);
+}
+
+/* ---------------- loops ---------------- */
+function startLoops(){
+  stopLoops();
+  touchPresence();
+  pollPresence();
+  presenceLoopId = setInterval(pollPresence, PRESENCE_POLL_MS);
+  heartbeatLoopId = setInterval(touchPresence, HEARTBEAT_MS);
+  animLoopId = requestAnimationFrame(animateAvatars);
+}
+function stopLoops(){
+  if(presenceLoopId) clearInterval(presenceLoopId);
+  if(heartbeatLoopId) clearInterval(heartbeatLoopId);
+  if(animLoopId) cancelAnimationFrame(animLoopId);
+  presenceLoopId = heartbeatLoopId = animLoopId = null;
+}
+
+/* ---------------- chat ---------------- */
+window.openChat = async function(targetWallet){
+  currentChatWith = targetWallet;
+  const person = peopleCache[targetWallet] || { wallet: targetWallet, nickname:'', avatarUrl:null, hue: hueFor(targetWallet) };
+  document.getElementById('chatWho').textContent = person.nickname && person.nickname.trim() ? person.nickname : short(person.wallet);
+  document.getElementById('chatWhoAddr').textContent = person.wallet;
+  document.getElementById('chatMiniDisc').style.boxShadow = '0 0 10px ' + (person.hue||'#3ef1ff');
+  document.getElementById('chatMiniDisc').style.borderColor = person.hue||'#3ef1ff';
+  document.getElementById('chatMiniDisc').innerHTML = avatarInnerHtml(person);
+
+  const isSelf = targetWallet === walletAddress;
+  document.getElementById('chatInputRow').style.display = isSelf ? 'none' : 'flex';
+
+  document.getElementById('chatOverlay').classList.add('open');
+
+  if(isSelf){
+    document.getElementById('chatBody').innerHTML = '<div class="self-note">This is your own identity disc. Double-click someone else&#39;s to open a channel with them.</div>';
+    return;
+  }
+
+  await loadChat();
+  if(chatPollId) clearInterval(chatPollId);
+  chatPollId = setInterval(loadChat, CHAT_POLL_MS);
+  document.getElementById('chatInput').focus();
+};
+window.closeChat = function(){
+  document.getElementById('chatOverlay').classList.remove('open');
+  currentChatWith = null;
+  if(chatPollId){ clearInterval(chatPollId); chatPollId = null; }
+};
+async function loadChat(){
+  if(!currentChatWith) return;
+  const key = pairKey(walletAddress, currentChatWith);
+  let data = { messages: [] };
+  try{ const r = await window.storage.get(key, true); data = r ? JSON.parse(r.value) : { messages: [] }; }catch(e){ data = { messages: [] }; }
+  renderChat(data.messages || []);
+}
+function renderChat(messages){
+  const body = document.getElementById('chatBody');
+  const wasAtBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 40;
+  if(!messages.length){ body.innerHTML = '<div class="chat-empty">No messages yet. Say hello across the Grid.</div>'; return; }
+  body.innerHTML = messages.map(m=>{
+    const mine = m.from === walletAddress;
+    const time = new Date(m.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    return `<div class="msg ${mine?'me':'them'}">${esc(m.text)}<span class="ts">${time}</span></div>`;
+  }).join('');
+  if(wasAtBottom) body.scrollTop = body.scrollHeight;
+}
+window.sendChat = async function(){
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if(!text || !currentChatWith) return;
+  input.value = '';
+  const key = pairKey(walletAddress, currentChatWith);
+  try{
+    let data = { messages: [] };
+    try{ const r = await window.storage.get(key, true); data = r ? JSON.parse(r.value) : { messages: [] }; }catch(e){}
+    data.messages = data.messages || [];
+    data.messages.push({ from: walletAddress, text: text.slice(0,500), ts: Date.now() });
+    if(data.messages.length > 300) data.messages = data.messages.slice(-300);
+    await window.storage.set(key, JSON.stringify(data), true);
+    renderChat(data.messages);
+  }catch(e){ showToast('Message failed to send.'); }
+};
+document.getElementById('chatInput').addEventListener('keydown', e=>{ if(e.key==='Enter') sendChat(); });
+document.getElementById('chatOverlay').addEventListener('mousedown', e=>{ if(e.target.id==='chatOverlay') closeChat(); });
+
+/* ---------------- boot: resume session if we have one ---------------- */
+(async function boot(){
+  try{
+    const r = await window.storage.get('my-profile', false);
+    if(r){
+      const p = JSON.parse(r.value);
+      if(p && p.wallet){
+        walletAddress = p.wallet; myNickname = p.nickname || ''; selectedAvatarUrl = p.avatarUrl || null; myHue = hueFor(p.wallet);
+        connectionSource = 'restored';
+        document.getElementById('lobbyWalletChip').textContent = short(walletAddress);
+        showScreen('screen-lobby');
+        startLoops();
+      }
+    }
+  }catch(e){ /* no saved session */ }
+})();
+</script>
+</body>
+</html>
