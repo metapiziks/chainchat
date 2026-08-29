@@ -367,6 +367,31 @@ function attachImgFallback(img, uri, onAllFailed){
   tryNext();
 }
 
+/* ---------------- storage (with graceful local fallback) ----------------
+   window.storage only exists inside the Claude.ai artifact runtime. If this
+   file is opened outside that runtime (downloaded and double-clicked, or
+   hosted elsewhere), window.storage is undefined — without this shim every
+   save/load would throw immediately. Falling back to an in-memory store lets
+   the app still run (nickname, avatar, your own lobby view all work); it
+   just won't sync presence/chat with anyone else, since there's no shared
+   backing store to sync through.
+   ------------------------------------------------------------------- */
+let usingFallbackStorage = false;
+const storage = (function(){
+  if(window.storage && typeof window.storage.get === 'function' && typeof window.storage.set === 'function'){
+    return window.storage;
+  }
+  usingFallbackStorage = true;
+  console.warn('[The Grid] window.storage is not available in this environment — falling back to in-memory storage. Presence and chat will not sync with other people; this only works when the page is opened inside a Claude.ai artifact.');
+  const mem = { personal:{}, shared:{} };
+  return {
+    async get(key, shared){ const s = shared?mem.shared:mem.personal; if(!(key in s)) throw new Error('key not found: '+key); return { key, value:s[key], shared:!!shared }; },
+    async set(key, value, shared){ const s = shared?mem.shared:mem.personal; s[key]=value; return { key, value, shared:!!shared }; },
+    async delete(key, shared){ const s = shared?mem.shared:mem.personal; const existed = key in s; delete s[key]; return { key, deleted:existed, shared:!!shared }; },
+    async list(prefix, shared){ const s = shared?mem.shared:mem.personal; const keys = Object.keys(s).filter(k=>!prefix||k.startsWith(prefix)); return { keys, prefix, shared:!!shared }; },
+  };
+})();
+
 /* ---------------- decorative streaks ---------------- */
 function buildStreaks(containerId, count){
   const el = document.getElementById(containerId);
@@ -427,7 +452,7 @@ async function onConnected(addr, src){
 
   // resume existing identity if we've set one up before on this device
   let existing = null;
-  try{ const r = await window.storage.get('my-profile', false); existing = r ? JSON.parse(r.value) : null; }catch(e){ existing = null; }
+  try{ const r = await storage.get('my-profile', false); existing = r ? JSON.parse(r.value) : null; }catch(e){ existing = null; }
   if(existing && existing.wallet === addr){
     myNickname = existing.nickname || '';
     selectedAvatarUri = existing.avatarUri || null;
@@ -445,8 +470,8 @@ window.disconnectWallet = async function(){
   stopLoops();
   if(walletAddress){
     try{
-      const raw = await window.storage.get('presence-directory', true).catch(()=>null);
-      if(raw){ const dir = JSON.parse(raw.value); delete dir[walletAddress]; await window.storage.set('presence-directory', JSON.stringify(dir), true); }
+      const raw = await storage.get('presence-directory', true).catch(()=>null);
+      if(raw){ const dir = JSON.parse(raw.value); delete dir[walletAddress]; await storage.set('presence-directory', JSON.stringify(dir), true); }
     }catch(e){}
   }
   try{ if(_dApp) await _dApp.clearActiveAccount(); }catch(e){}
@@ -543,13 +568,15 @@ window.enterGrid = async function(){
   const btn = document.getElementById('enterGridBtn');
   btn.disabled = true; btn.textContent = 'Entering…';
   try{
-    await window.storage.set('my-profile', JSON.stringify({ wallet: walletAddress, nickname: myNickname, avatarUri: selectedAvatarUri }), false);
+    await storage.set('my-profile', JSON.stringify({ wallet: walletAddress, nickname: myNickname, avatarUri: selectedAvatarUri }), false);
     await touchPresence();
     document.getElementById('lobbyWalletChip').textContent = short(walletAddress);
     showScreen('screen-lobby');
     startLoops();
+    if(usingFallbackStorage) showToast('Local-only mode — this browser can\'t see other people on the Grid.');
   }catch(e){
-    showToast('Could not save your identity. Try again.');
+    console.error('[The Grid] enterGrid failed:', e);
+    showToast('Could not save your identity — ' + (e?.message || 'unknown error') + '.');
   }finally{
     btn.disabled = false; btn.textContent = 'Enter the Grid →';
   }
@@ -566,14 +593,14 @@ window.openEditIdentity = function(){
 async function touchPresence(){
   try{
     let dir = {};
-    try{ const r = await window.storage.get('presence-directory', true); dir = r ? JSON.parse(r.value) : {}; }catch(e){ dir = {}; }
+    try{ const r = await storage.get('presence-directory', true); dir = r ? JSON.parse(r.value) : {}; }catch(e){ dir = {}; }
     dir[walletAddress] = { wallet: walletAddress, nickname: myNickname, avatarUri: selectedAvatarUri, hue: myHue, updatedAt: Date.now() };
-    await window.storage.set('presence-directory', JSON.stringify(dir), true);
+    await storage.set('presence-directory', JSON.stringify(dir), true);
   }catch(e){ /* best-effort */ }
 }
 async function pollPresence(){
   try{
-    const r = await window.storage.get('presence-directory', true);
+    const r = await storage.get('presence-directory', true);
     const dir = r ? JSON.parse(r.value) : {};
     const now = Date.now();
     const live = {};
@@ -723,7 +750,7 @@ async function loadChat(){
   if(!currentChatWith) return;
   const key = pairKey(walletAddress, currentChatWith);
   let data = { messages: [] };
-  try{ const r = await window.storage.get(key, true); data = r ? JSON.parse(r.value) : { messages: [] }; }catch(e){ data = { messages: [] }; }
+  try{ const r = await storage.get(key, true); data = r ? JSON.parse(r.value) : { messages: [] }; }catch(e){ data = { messages: [] }; }
   renderChat(data.messages || []);
 }
 function renderChat(messages){
@@ -745,11 +772,11 @@ window.sendChat = async function(){
   const key = pairKey(walletAddress, currentChatWith);
   try{
     let data = { messages: [] };
-    try{ const r = await window.storage.get(key, true); data = r ? JSON.parse(r.value) : { messages: [] }; }catch(e){}
+    try{ const r = await storage.get(key, true); data = r ? JSON.parse(r.value) : { messages: [] }; }catch(e){}
     data.messages = data.messages || [];
     data.messages.push({ from: walletAddress, text: text.slice(0,500), ts: Date.now() });
     if(data.messages.length > 300) data.messages = data.messages.slice(-300);
-    await window.storage.set(key, JSON.stringify(data), true);
+    await storage.set(key, JSON.stringify(data), true);
     renderChat(data.messages);
   }catch(e){ showToast('Message failed to send.'); }
 };
@@ -759,7 +786,7 @@ document.getElementById('chatOverlay').addEventListener('mousedown', e=>{ if(e.t
 /* ---------------- boot: resume session if we have one ---------------- */
 (async function boot(){
   try{
-    const r = await window.storage.get('my-profile', false);
+    const r = await storage.get('my-profile', false);
     if(r){
       const p = JSON.parse(r.value);
       if(p && p.wallet){
