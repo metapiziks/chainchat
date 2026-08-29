@@ -314,13 +314,13 @@ const CHAT_POLL_MS = 4000;
 
 let walletAddress = null, connectionSource = null;
 let nftTokens = [];
-let selectedAvatarUrl = null;
+let selectedAvatarUri = null;   // raw uri (ipfs://…, ar://…, or http) — resolved per-viewer at render time
 let myNickname = '';
 let myHue = PALETTE[0];
 let _dApp = null, _kukai = null;
 
 let presenceLoopId = null, heartbeatLoopId = null, animLoopId = null, chatPollId = null;
-let peopleCache = {};           // wallet -> {nickname, avatarUrl, wallet, updatedAt, hue}
+let peopleCache = {};           // wallet -> {nickname, avatarUri, wallet, updatedAt, hue}
 let avatarEls = {};             // wallet -> DOM node
 let currentChatWith = null;
 
@@ -334,6 +334,38 @@ function mulberry32(seed){ return function(){ seed |= 0; seed = (seed + 0x6D2B79
 function hueFor(wallet){ const s=hashStr(wallet)(); return PALETTE[s % PALETTE.length]; }
 function pairKey(a,b){ return 'chat:' + [a,b].sort().join('__'); }
 function initials(nickname, wallet){ const src = nickname && nickname.trim() ? nickname.trim() : (wallet||'?'); return src.slice(0,2).toUpperCase(); }
+
+/* ---------------- image resolution (multi-gateway fallback) ----------------
+   NFT metadata usually points at ipfs://<cid> or ar://<id>. Public gateways
+   are flaky, so every viewer resolves candidates independently and an <img>
+   walks through them on error instead of the tile just vanishing. */
+const IPFS_GATEWAYS = [
+  cid => 'https://ipfs.fileship.xyz/' + cid,
+  cid => 'https://ipfs.io/ipfs/' + cid,
+  cid => 'https://nftstorage.link/ipfs/' + cid,
+  cid => 'https://cloudflare-ipfs.com/ipfs/' + cid,
+  cid => 'https://dweb.link/ipfs/' + cid,
+  cid => 'https://gateway.pinata.cloud/ipfs/' + cid,
+];
+function imageCandidates(uri){
+  if(!uri) return [];
+  if(uri.startsWith('ipfs://')){ const p = uri.slice(7); return IPFS_GATEWAYS.map(g => g(p)); }
+  if(uri.startsWith('ar://')){ return ['https://arweave.net/' + uri.slice(5)]; }
+  return [uri];
+}
+/* Wires up automatic gateway fallback on an <img>. If every candidate fails,
+   calls onAllFailed() so the caller can swap in an initials fallback instead
+   of deleting anything. */
+function attachImgFallback(img, uri, onAllFailed){
+  const candidates = imageCandidates(uri);
+  let i = 0;
+  function tryNext(){
+    if(i >= candidates.length){ if(onAllFailed) onAllFailed(); return; }
+    img.src = candidates[i++];
+  }
+  img.onerror = tryNext;
+  tryNext();
+}
 
 /* ---------------- decorative streaks ---------------- */
 function buildStreaks(containerId, count){
@@ -398,9 +430,9 @@ async function onConnected(addr, src){
   try{ const r = await window.storage.get('my-profile', false); existing = r ? JSON.parse(r.value) : null; }catch(e){ existing = null; }
   if(existing && existing.wallet === addr){
     myNickname = existing.nickname || '';
-    selectedAvatarUrl = existing.avatarUrl || null;
+    selectedAvatarUri = existing.avatarUri || null;
   } else {
-    myNickname = ''; selectedAvatarUrl = null;
+    myNickname = ''; selectedAvatarUri = null;
   }
 
   document.getElementById('setupWalletLine').textContent = addr;
@@ -418,7 +450,7 @@ window.disconnectWallet = async function(){
     }catch(e){}
   }
   try{ if(_dApp) await _dApp.clearActiveAccount(); }catch(e){}
-  walletAddress=null; connectionSource=null; nftTokens=[]; selectedAvatarUrl=null; peopleCache={}; avatarEls={};
+  walletAddress=null; connectionSource=null; nftTokens=[]; selectedAvatarUri=null; peopleCache={}; avatarEls={};
   document.getElementById('arena').querySelectorAll('.avatar-node').forEach(n=>n.remove());
   setCS('');
   showScreen('screen-connect');
@@ -449,7 +481,7 @@ async function scanWallet(){
     }).map(row=>{
       const meta = row.token.metadata || {};
       const uri = meta.displayUri || meta.thumbnailUri || meta.artifactUri || meta.image || '';
-      return { name: meta.name || 'Untitled', url: ipfsToHttp(uri) };
+      return { name: meta.name || 'Untitled', uri };
     }).slice(0, 60);
   }catch(e){
     nftTokens = [];
@@ -458,11 +490,6 @@ async function scanWallet(){
     return;
   }
   renderAvatarGrid();
-}
-function ipfsToHttp(uri){
-  if(!uri) return '';
-  if(uri.startsWith('ipfs://')) return 'https://ipfs.io/ipfs/' + uri.slice(7);
-  return uri;
 }
 function renderAvatarGrid(keepMessage){
   const grid = document.getElementById('avatarGrid');
@@ -477,11 +504,14 @@ function renderAvatarGrid(keepMessage){
   nftTokens.forEach(t=>{
     const d = document.createElement('div');
     d.className = 'avatar-pick';
+    d.dataset.uri = t.uri;
     const img = document.createElement('img');
-    img.src = t.url; img.loading='lazy'; img.alt = esc(t.name);
-    img.onerror = ()=>{ d.remove(); };
+    img.loading = 'lazy'; img.alt = esc(t.name); img.referrerPolicy = 'no-referrer';
     d.appendChild(img);
-    d.onclick = () => selectAvatar(t.url, d);
+    attachImgFallback(img, t.uri, () => {
+      d.innerHTML = `<div class="avatar-fallback" style="background:linear-gradient(160deg,#3a4552,#0a1119);font-size:1rem;">✕</div>`;
+    });
+    d.onclick = () => selectAvatar(t.uri, d);
     grid.appendChild(d);
   });
 
@@ -496,13 +526,12 @@ function renderAvatarGrid(keepMessage){
   // restore prior selection if it still matches an option
   let matched = false;
   grid.querySelectorAll('.avatar-pick').forEach(el=>{
-    const img = el.querySelector('img');
-    if(selectedAvatarUrl && img && img.src === selectedAvatarUrl){ el.classList.add('selected'); matched = true; }
+    if(selectedAvatarUri && el.dataset.uri === selectedAvatarUri){ el.classList.add('selected'); matched = true; }
   });
-  if(!matched){ selectedAvatarUrl = null; def.classList.add('selected'); }
+  if(!matched){ selectedAvatarUri = null; def.classList.add('selected'); }
 }
-function selectAvatar(url, el){
-  selectedAvatarUrl = url;
+function selectAvatar(uri, el){
+  selectedAvatarUri = uri;
   document.querySelectorAll('.avatar-pick').forEach(n=>n.classList.remove('selected'));
   el.classList.add('selected');
 }
@@ -514,7 +543,7 @@ window.enterGrid = async function(){
   const btn = document.getElementById('enterGridBtn');
   btn.disabled = true; btn.textContent = 'Entering…';
   try{
-    await window.storage.set('my-profile', JSON.stringify({ wallet: walletAddress, nickname: myNickname, avatarUrl: selectedAvatarUrl }), false);
+    await window.storage.set('my-profile', JSON.stringify({ wallet: walletAddress, nickname: myNickname, avatarUri: selectedAvatarUri }), false);
     await touchPresence();
     document.getElementById('lobbyWalletChip').textContent = short(walletAddress);
     showScreen('screen-lobby');
@@ -538,7 +567,7 @@ async function touchPresence(){
   try{
     let dir = {};
     try{ const r = await window.storage.get('presence-directory', true); dir = r ? JSON.parse(r.value) : {}; }catch(e){ dir = {}; }
-    dir[walletAddress] = { wallet: walletAddress, nickname: myNickname, avatarUrl: selectedAvatarUrl, hue: myHue, updatedAt: Date.now() };
+    dir[walletAddress] = { wallet: walletAddress, nickname: myNickname, avatarUri: selectedAvatarUri, hue: myHue, updatedAt: Date.now() };
     await window.storage.set('presence-directory', JSON.stringify(dir), true);
   }catch(e){ /* best-effort */ }
 }
@@ -549,11 +578,11 @@ async function pollPresence(){
     const now = Date.now();
     const live = {};
     Object.keys(dir).forEach(w=>{ if(now - (dir[w].updatedAt||0) < STALE_MS) live[w] = dir[w]; });
-    if(!live[walletAddress]) live[walletAddress] = { wallet: walletAddress, nickname: myNickname, avatarUrl: selectedAvatarUrl, hue: myHue, updatedAt: now };
+    if(!live[walletAddress]) live[walletAddress] = { wallet: walletAddress, nickname: myNickname, avatarUri: selectedAvatarUri, hue: myHue, updatedAt: now };
     syncAvatarNodes(live);
   }catch(e){
     // no directory yet — just show ourselves
-    syncAvatarNodes({ [walletAddress]: { wallet: walletAddress, nickname: myNickname, avatarUrl: selectedAvatarUrl, hue: myHue, updatedAt: Date.now() } });
+    syncAvatarNodes({ [walletAddress]: { wallet: walletAddress, nickname: myNickname, avatarUri: selectedAvatarUri, hue: myHue, updatedAt: Date.now() } });
   }
 }
 function syncAvatarNodes(live){
@@ -580,21 +609,39 @@ function buildAvatarNode(person){
   node.innerHTML = `
     <div class="trail"></div>
     <div class="ring"></div>
-    <div class="disc">${avatarInnerHtml(person)}</div>
+    <div class="disc"></div>
     <div class="nameplate">${nameplateHtml(person)}</div>
   `;
+  renderAvatarInto(node.querySelector('.disc'), person);
+  node.dataset.avatarUri = person.avatarUri || '';
   node.addEventListener('dblclick', ()=> openChat(person.wallet));
   arenaSeed(node, person.wallet);
   return node;
 }
 function updateAvatarNode(node, person){
   node.style.setProperty('--ac', person.hue || hueFor(person.wallet));
-  node.querySelector('.disc').innerHTML = avatarInnerHtml(person);
+  // only touch the <img> if the avatar actually changed — avoids restarting
+  // the gateway-fallback cycle (and any visible flicker) on every poll tick
+  if(node.dataset.avatarUri !== (person.avatarUri || '')){
+    renderAvatarInto(node.querySelector('.disc'), person);
+    node.dataset.avatarUri = person.avatarUri || '';
+  }
   node.querySelector('.nameplate').innerHTML = nameplateHtml(person);
 }
-function avatarInnerHtml(person){
-  if(person.avatarUrl){ return `<img src="${esc(person.avatarUrl)}" alt="" onerror="this.parentElement.innerHTML='<div class=&quot;avatar-fallback&quot; style=&quot;background:linear-gradient(160deg,${person.hue||'#3ef1ff'},#0a1119)&quot;>${esc(initials(person.nickname, person.wallet))}</div>'">`; }
-  return `<div class="avatar-fallback" style="background:linear-gradient(160deg,${person.hue||'#3ef1ff'},#0a1119);">${esc(initials(person.nickname, person.wallet))}</div>`;
+/* Renders into a container element (rather than returning a string) so we can
+   wire up multi-gateway <img> fallback instead of a single brittle src. */
+function renderAvatarInto(container, person){
+  container.innerHTML = '';
+  if(person.avatarUri){
+    const img = document.createElement('img');
+    img.alt = ''; img.referrerPolicy = 'no-referrer';
+    container.appendChild(img);
+    attachImgFallback(img, person.avatarUri, () => {
+      container.innerHTML = `<div class="avatar-fallback" style="background:linear-gradient(160deg,${person.hue||'#3ef1ff'},#0a1119);">${esc(initials(person.nickname, person.wallet))}</div>`;
+    });
+  } else {
+    container.innerHTML = `<div class="avatar-fallback" style="background:linear-gradient(160deg,${person.hue||'#3ef1ff'},#0a1119);">${esc(initials(person.nickname, person.wallet))}</div>`;
+  }
 }
 function nameplateHtml(person){
   const label = person.nickname && person.nickname.trim() ? esc(person.nickname) : short(person.wallet);
@@ -645,12 +692,12 @@ function stopLoops(){
 /* ---------------- chat ---------------- */
 window.openChat = async function(targetWallet){
   currentChatWith = targetWallet;
-  const person = peopleCache[targetWallet] || { wallet: targetWallet, nickname:'', avatarUrl:null, hue: hueFor(targetWallet) };
+  const person = peopleCache[targetWallet] || { wallet: targetWallet, nickname:'', avatarUri:null, hue: hueFor(targetWallet) };
   document.getElementById('chatWho').textContent = person.nickname && person.nickname.trim() ? person.nickname : short(person.wallet);
   document.getElementById('chatWhoAddr').textContent = person.wallet;
   document.getElementById('chatMiniDisc').style.boxShadow = '0 0 10px ' + (person.hue||'#3ef1ff');
   document.getElementById('chatMiniDisc').style.borderColor = person.hue||'#3ef1ff';
-  document.getElementById('chatMiniDisc').innerHTML = avatarInnerHtml(person);
+  renderAvatarInto(document.getElementById('chatMiniDisc'), person);
 
   const isSelf = targetWallet === walletAddress;
   document.getElementById('chatInputRow').style.display = isSelf ? 'none' : 'flex';
@@ -716,7 +763,7 @@ document.getElementById('chatOverlay').addEventListener('mousedown', e=>{ if(e.t
     if(r){
       const p = JSON.parse(r.value);
       if(p && p.wallet){
-        walletAddress = p.wallet; myNickname = p.nickname || ''; selectedAvatarUrl = p.avatarUrl || null; myHue = hueFor(p.wallet);
+        walletAddress = p.wallet; myNickname = p.nickname || ''; selectedAvatarUri = p.avatarUri || null; myHue = hueFor(p.wallet);
         connectionSource = 'restored';
         document.getElementById('lobbyWalletChip').textContent = short(walletAddress);
         showScreen('screen-lobby');
