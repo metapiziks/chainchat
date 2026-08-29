@@ -141,6 +141,8 @@
   .avatar-pick.selected::after{content:'✓'; position:absolute; top:2px; right:4px; color:var(--neon-cyan); font-weight:900; text-shadow:0 0 6px #000;}
   .avatar-fallback{display:flex; align-items:center; justify-content:center; font-family:'Orbitron',sans-serif; font-weight:900;
     font-size:1.4rem; width:100%; height:100%; color:#04070c;}
+  .avatar-fallback.loading{color:var(--neon-cyan); font-size:1.1rem; animation:avLoadPulse 1.1s ease-in-out infinite;}
+  @keyframes avLoadPulse{ 0%,100%{opacity:.3;} 50%{opacity:.9;} }
   .setup-empty{font-size:.85rem; color:var(--dim); padding:1rem; text-align:center;}
   .setup-actions{display:flex; justify-content:flex-end; gap:.6rem; margin-top:1.4rem;}
 
@@ -353,18 +355,46 @@ function imageCandidates(uri){
   if(uri.startsWith('ar://')){ return ['https://arweave.net/' + uri.slice(5)]; }
   return [uri];
 }
-/* Wires up automatic gateway fallback on an <img>. If every candidate fails,
-   calls onAllFailed() so the caller can swap in an initials fallback instead
-   of deleting anything. */
-function attachImgFallback(img, uri, onAllFailed){
+/* Fully validates a candidate URL before it's ever shown, so a slow/flaky
+   gateway can't leave a half-streamed image on screen that then "vanishes"
+   when the connection drops mid-load. Prefers fetch()+blob (guarantees the
+   full image downloaded intact); if fetch is blocked (commonly CORS on
+   gateways that don't send Access-Control-Allow-Origin), falls back to a
+   plain <img> probe, which doesn't require CORS to display. */
+function validateImageUrl(url, timeoutMs){
+  return new Promise(resolve=>{
+    let settled = false;
+    const done = (result) => { if(settled) return; settled = true; clearTimeout(timer); resolve(result); };
+    const timer = setTimeout(()=>done(null), timeoutMs || 8000);
+    fetch(url, { mode:'cors' }).then(res=>{
+      if(!res.ok) throw new Error('bad status');
+      return res.blob();
+    }).then(blob=>{
+      if(!blob.type.startsWith('image/')) throw new Error('not an image');
+      done(URL.createObjectURL(blob));
+    }).catch(()=>{
+      if(settled) return;
+      const probe = new Image();
+      probe.onload = () => done(url);
+      probe.onerror = () => done(null);
+      probe.src = url;
+    });
+  });
+}
+/* Walks the gateway candidate list, validating each in turn, and only calls
+   onSuccess once a fully-loaded, displayable image is confirmed. */
+function loadAvatarImage(uri, { onSuccess, onFail }){
   const candidates = imageCandidates(uri);
+  if(!candidates.length){ onFail(); return; }
   let i = 0;
-  function tryNext(){
-    if(i >= candidates.length){ if(onAllFailed) onAllFailed(); return; }
-    img.src = candidates[i++];
-  }
-  img.onerror = tryNext;
-  tryNext();
+  (function tryNext(){
+    if(i >= candidates.length){ onFail(); return; }
+    validateImageUrl(candidates[i++]).then(src => src ? onSuccess(src) : tryNext());
+  })();
+}
+function revokeIfBlob(container){
+  const img = container.querySelector('img');
+  if(img && img.src && img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
 }
 
 /* ---------------- storage (with graceful local fallback) ----------------
@@ -530,14 +560,25 @@ function renderAvatarGrid(keepMessage){
     const d = document.createElement('div');
     d.className = 'avatar-pick';
     d.dataset.uri = t.uri;
-    const img = document.createElement('img');
-    img.loading = 'lazy'; img.alt = esc(t.name); img.referrerPolicy = 'no-referrer';
-    d.appendChild(img);
-    attachImgFallback(img, t.uri, () => {
-      d.innerHTML = `<div class="avatar-fallback" style="background:linear-gradient(160deg,#3a4552,#0a1119);font-size:1rem;">✕</div>`;
-    });
+    d.innerHTML = `<div class="avatar-fallback loading">⋯</div>`;
     d.onclick = () => selectAvatar(t.uri, d);
     grid.appendChild(d);
+    d._avToken = (d._avToken || 0) + 1;
+    const token = d._avToken;
+    loadAvatarImage(t.uri, {
+      onSuccess: (src) => {
+        if(d._avToken !== token) return;
+        revokeIfBlob(d);
+        d.innerHTML = '';
+        const img = document.createElement('img');
+        img.alt = esc(t.name); img.referrerPolicy = 'no-referrer'; img.src = src;
+        d.appendChild(img);
+      },
+      onFail: () => {
+        if(d._avToken !== token) return;
+        d.innerHTML = `<div class="avatar-fallback" style="background:linear-gradient(160deg,#3a4552,#0a1119);font-size:1rem;">✕</div>`;
+      },
+    });
   });
 
   if(nftTokens.length === 0 && !keepMessage){
@@ -658,16 +699,24 @@ function updateAvatarNode(node, person){
 /* Renders into a container element (rather than returning a string) so we can
    wire up multi-gateway <img> fallback instead of a single brittle src. */
 function renderAvatarInto(container, person){
-  container.innerHTML = '';
+  revokeIfBlob(container);
+  container._avToken = (container._avToken || 0) + 1;
+  const token = container._avToken;
+  const fallbackHtml = `<div class="avatar-fallback" style="background:linear-gradient(160deg,${person.hue||'#3ef1ff'},#0a1119);">${esc(initials(person.nickname, person.wallet))}</div>`;
   if(person.avatarUri){
-    const img = document.createElement('img');
-    img.alt = ''; img.referrerPolicy = 'no-referrer';
-    container.appendChild(img);
-    attachImgFallback(img, person.avatarUri, () => {
-      container.innerHTML = `<div class="avatar-fallback" style="background:linear-gradient(160deg,${person.hue||'#3ef1ff'},#0a1119);">${esc(initials(person.nickname, person.wallet))}</div>`;
+    container.innerHTML = `<div class="avatar-fallback loading" style="background:#0a1119;">⋯</div>`;
+    loadAvatarImage(person.avatarUri, {
+      onSuccess: (src) => {
+        if(container._avToken !== token) return;
+        container.innerHTML = '';
+        const img = document.createElement('img');
+        img.alt = ''; img.referrerPolicy = 'no-referrer'; img.src = src;
+        container.appendChild(img);
+      },
+      onFail: () => { if(container._avToken === token) container.innerHTML = fallbackHtml; },
     });
   } else {
-    container.innerHTML = `<div class="avatar-fallback" style="background:linear-gradient(160deg,${person.hue||'#3ef1ff'},#0a1119);">${esc(initials(person.nickname, person.wallet))}</div>`;
+    container.innerHTML = fallbackHtml;
   }
 }
 function nameplateHtml(person){
