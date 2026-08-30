@@ -3,8 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>THE GRID — Tezos Lobby</title>
+<title>Tezchat — Tezos Lobby</title>
 <script src="https://unpkg.com/@tezos-x/octez.connect-dapp@5.0.0-beta.6/dist/octez.connect.dapp.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
 <link rel="preconnect" href="https://api.tzkt.io">
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <style>
@@ -221,7 +223,7 @@
   <div id="screen-connect" class="screen active">
     <div class="backdrop"><div class="floor"></div><div class="horizon"></div><div class="streaks" id="streaksConnect"></div><div class="scanlines"></div><div class="vignette"></div></div>
     <div class="connect-wrap">
-      <h1>THE <span>GRID</span></h1>
+      <h1>TEZ<span>CHAT</span></h1>
       <div class="tagline">Greetings, Program. Connect your Tezos wallet to enter.</div>
       <button class="connect-opt" onclick="connectBeacon()"><span class="ic">🔐</span> Temple · AirGap · Beacon</button>
       <button class="connect-opt" onclick="connectKukai()"><span class="ic">🌐</span> Kukai Social</button>
@@ -242,7 +244,7 @@
       <div class="setup-sub mono" id="setupWalletLine">—</div>
 
       <div class="setup-label">Nickname</div>
-      <input class="field" id="nicknameInput" maxlength="20" placeholder="How should the Grid know you?">
+      <input class="field" id="nicknameInput" maxlength="20" placeholder="How should Tezchat know you?">
 
       <div class="setup-label">Choose your avatar</div>
       <div class="avatar-grid" id="avatarGrid">
@@ -251,7 +253,7 @@
 
       <div class="setup-actions">
         <button class="btn" onclick="disconnectWallet()">Back</button>
-        <button class="btn btn-primary" id="enterGridBtn" onclick="enterGrid()">Enter the Grid →</button>
+        <button class="btn btn-primary" id="enterGridBtn" onclick="enterGrid()">Enter Tezchat →</button>
       </div>
     </div>
   </div>
@@ -259,7 +261,7 @@
   <!-- ================= LOBBY SCREEN ================= -->
   <div id="screen-lobby" class="screen">
     <div class="topbar">
-      <div class="brand">THE <span>GRID</span></div>
+      <div class="brand">TEZ<span>CHAT</span></div>
       <div class="topbar-right">
         <div class="wallet-chip"><span class="wdot"></span><span class="mono" id="lobbyWalletChip" style="font-size:.75rem;"></span></div>
         <button class="btn btn-sm" onclick="openEditIdentity()">✎ Identity</button>
@@ -271,7 +273,7 @@
       <!-- avatar-node elements injected here -->
     </div>
     <div class="lobby-footer">
-      <span><b id="onlineCount">1</b> program(s) on the Grid</span>
+      <span><b id="onlineCount">1</b> program(s) on Tezchat</span>
       <span>Hover a disc for identity · Double-click to open a channel</span>
     </div>
   </div>
@@ -301,18 +303,40 @@
 
 <script>
 /* =========================================================================
-   THE GRID — Tezos-gated lobby
+   TEZCHAT — Tezos-gated lobby
    Wallet connect logic (Beacon / Kukai / manual tz address) and NFT scan
    are adapted from the user's provided wallet-login flow.
-   Presence + chat are powered by artifact shared storage, so anyone who
-   has this page open shares the same live lobby.
+   Presence + chat are powered by Firebase Realtime Database — fill in
+   FIREBASE_CONFIG below (see the setup steps you were given). Until it's
+   filled in, the app runs in a local-only fallback so it never crashes,
+   it just can't show you anyone else.
    ========================================================================= */
 
+/* ---- STEP: paste your Firebase config here ---- */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyA610esoxqdtzwHQQ9I2brnN3RYnuVN7nM",
+  authDomain: "tezchat-7bc58.firebaseapp.com",
+  databaseURL: "https://tezchat-7bc58-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "tezchat-7bc58",
+  storageBucket: "tezchat-7bc58.firebasestorage.app",
+  messagingSenderId: "310316065060",
+  appId: "1:310316065060:web:20e758bcda20c85d7913b1"
+};
+
+let db = null, firebaseReady = false;
+try{
+  if(FIREBASE_CONFIG.apiKey && !FIREBASE_CONFIG.apiKey.startsWith('PASTE')){
+    firebase.initializeApp(FIREBASE_CONFIG);
+    db = firebase.database();
+    firebaseReady = true;
+  }
+}catch(e){
+  console.warn('[Tezchat] Firebase init failed — running local-only.', e);
+}
+
 const PALETTE = ['#3ef1ff','#ffab3d','#ff4fe0','#8dff5c'];
-const STALE_MS = 90 * 1000;          // presence considered offline after this
-const HEARTBEAT_MS = 20 * 1000;
-const PRESENCE_POLL_MS = 5000;
-const CHAT_POLL_MS = 4000;
+const PRESENCE_STALE_MS = 5 * 60 * 1000;   // safety-net only; onDisconnect() handles the normal case
+const HEARTBEAT_MS = 60 * 1000;
 
 let walletAddress = null, connectionSource = null;
 let nftTokens = [];
@@ -321,10 +345,14 @@ let myNickname = '';
 let myHue = PALETTE[0];
 let _dApp = null, _kukai = null;
 
-let presenceLoopId = null, heartbeatLoopId = null, animLoopId = null, chatPollId = null;
+let heartbeatLoopId = null, animLoopId = null;
+let presenceRef = null;         // firebase ref, so we can .off() it on disconnect
 let peopleCache = {};           // wallet -> {nickname, avatarUri, wallet, updatedAt, hue}
 let avatarEls = {};             // wallet -> DOM node
 let currentChatWith = null;
+let currentChatRef = null;      // firebase ref currently subscribed to (so we can .off() it)
+
+function safeKey(s){ return String(s||'').replace(/[.#$\[\]\/\s]/g, '_'); }
 
 /* ---------------- utils ---------------- */
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -397,30 +425,11 @@ function revokeIfBlob(container){
   if(img && img.src && img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
 }
 
-/* ---------------- storage (with graceful local fallback) ----------------
-   window.storage only exists inside the Claude.ai artifact runtime. If this
-   file is opened outside that runtime (downloaded and double-clicked, or
-   hosted elsewhere), window.storage is undefined — without this shim every
-   save/load would throw immediately. Falling back to an in-memory store lets
-   the app still run (nickname, avatar, your own lobby view all work); it
-   just won't sync presence/chat with anyone else, since there's no shared
-   backing store to sync through.
-   ------------------------------------------------------------------- */
-let usingFallbackStorage = false;
-const storage = (function(){
-  if(window.storage && typeof window.storage.get === 'function' && typeof window.storage.set === 'function'){
-    return window.storage;
-  }
-  usingFallbackStorage = true;
-  console.warn('[The Grid] window.storage is not available in this environment — falling back to in-memory storage. Presence and chat will not sync with other people; this only works when the page is opened inside a Claude.ai artifact.');
-  const mem = { personal:{}, shared:{} };
-  return {
-    async get(key, shared){ const s = shared?mem.shared:mem.personal; if(!(key in s)) throw new Error('key not found: '+key); return { key, value:s[key], shared:!!shared }; },
-    async set(key, value, shared){ const s = shared?mem.shared:mem.personal; s[key]=value; return { key, value, shared:!!shared }; },
-    async delete(key, shared){ const s = shared?mem.shared:mem.personal; const existed = key in s; delete s[key]; return { key, deleted:existed, shared:!!shared }; },
-    async list(prefix, shared){ const s = shared?mem.shared:mem.personal; const keys = Object.keys(s).filter(k=>!prefix||k.startsWith(prefix)); return { keys, prefix, shared:!!shared }; },
-  };
-})();
+/* ---------------- local-only fallback profile store ----------------
+   Used only when FIREBASE_CONFIG hasn't been filled in yet. Keeps the app
+   from crashing and lets you preview your own identity/lobby, but there's
+   no shared backend here, so it genuinely can't show other people. */
+const localProfiles = {};
 
 /* ---------------- decorative streaks ---------------- */
 function buildStreaks(containerId, count){
@@ -442,7 +451,7 @@ buildStreaks('streaksSetup', 10);
 buildStreaks('streaksLobby', 14);
 
 /* ---------------- wallet connect ---------------- */
-function getDApp(){ if(!_dApp) _dApp = new beacon.DAppClient({ name:'The Grid', network:{ type: beacon.NetworkType.MAINNET } }); return _dApp; }
+function getDApp(){ if(!_dApp) _dApp = new beacon.DAppClient({ name:'Tezchat', network:{ type: beacon.NetworkType.MAINNET } }); return _dApp; }
 async function getKukai(){
   if(_kukai) return _kukai;
   const m = await import('https://esm.sh/kukai-embed@0.9.7');
@@ -480,15 +489,19 @@ async function onConnected(addr, src){
   walletAddress = addr; connectionSource = src; myHue = hueFor(addr);
   showToast('Wallet connected: ' + short(addr));
 
-  // resume existing identity if we've set one up before on this device
+  // resume existing identity (nickname/avatar) if this wallet has used Tezchat before
   let existing = null;
-  try{ const r = await storage.get('my-profile', false); existing = r ? JSON.parse(r.value) : null; }catch(e){ existing = null; }
-  if(existing && existing.wallet === addr){
-    myNickname = existing.nickname || '';
-    selectedAvatarUri = existing.avatarUri || null;
-  } else {
-    myNickname = ''; selectedAvatarUri = null;
-  }
+  try{
+    if(firebaseReady){
+      const snap = await db.ref('profiles/' + safeKey(addr)).once('value');
+      existing = snap.val();
+    } else {
+      existing = localProfiles[addr] || null;
+    }
+  }catch(e){ existing = null; }
+
+  myNickname = existing?.nickname || '';
+  selectedAvatarUri = existing?.avatarUri || null;
 
   document.getElementById('setupWalletLine').textContent = addr;
   document.getElementById('nicknameInput').value = myNickname;
@@ -498,11 +511,8 @@ async function onConnected(addr, src){
 
 window.disconnectWallet = async function(){
   stopLoops();
-  if(walletAddress){
-    try{
-      const raw = await storage.get('presence-directory', true).catch(()=>null);
-      if(raw){ const dir = JSON.parse(raw.value); delete dir[walletAddress]; await storage.set('presence-directory', JSON.stringify(dir), true); }
-    }catch(e){}
+  if(walletAddress && firebaseReady){
+    try{ await db.ref('presence/' + safeKey(walletAddress)).remove(); }catch(e){}
   }
   try{ if(_dApp) await _dApp.clearActiveAccount(); }catch(e){}
   walletAddress=null; connectionSource=null; nftTokens=[]; selectedAvatarUri=null; peopleCache={}; avatarEls={};
@@ -609,17 +619,21 @@ window.enterGrid = async function(){
   const btn = document.getElementById('enterGridBtn');
   btn.disabled = true; btn.textContent = 'Entering…';
   try{
-    await storage.set('my-profile', JSON.stringify({ wallet: walletAddress, nickname: myNickname, avatarUri: selectedAvatarUri }), false);
-    await touchPresence();
+    const profile = { nickname: myNickname, avatarUri: selectedAvatarUri };
+    if(firebaseReady){
+      await db.ref('profiles/' + safeKey(walletAddress)).set(profile);
+    } else {
+      localProfiles[walletAddress] = profile;
+    }
     document.getElementById('lobbyWalletChip').textContent = short(walletAddress);
     showScreen('screen-lobby');
     startLoops();
-    if(usingFallbackStorage) showToast('Local-only mode — this browser can\'t see other people on the Grid.');
+    if(!firebaseReady) showToast('Local-only mode — Firebase isn\'t configured yet, so this browser can\'t see other people on Tezchat.');
   }catch(e){
-    console.error('[The Grid] enterGrid failed:', e);
+    console.error('[Tezchat] enterGrid failed:', e);
     showToast('Could not save your identity — ' + (e?.message || 'unknown error') + '.');
   }finally{
-    btn.disabled = false; btn.textContent = 'Enter the Grid →';
+    btn.disabled = false; btn.textContent = 'Enter Tezchat →';
   }
 };
 window.openEditIdentity = function(){
@@ -630,28 +644,41 @@ window.openEditIdentity = function(){
   showScreen('screen-setup');
 };
 
-/* ---------------- presence directory (shared storage) ---------------- */
+/* ---------------- presence (Firebase Realtime Database) ----------------
+   Each person writes only their own child node — no read-modify-write race
+   like the old shared-storage version had. onDisconnect() also tells
+   Firebase's servers to auto-remove your node if the tab closes or the
+   connection drops, so stale ghost avatars are the exception, not the norm.
+   presence/ is intentionally separate from profiles/: presence is "who's
+   here right now", profiles is "who has ever set up an identity". */
 async function touchPresence(){
+  if(!firebaseReady){
+    // local-only: just render ourselves so the lobby isn't empty
+    syncAvatarNodes({ [walletAddress]: { wallet: walletAddress, nickname: myNickname, avatarUri: selectedAvatarUri, hue: myHue, updatedAt: Date.now() } });
+    return;
+  }
   try{
-    let dir = {};
-    try{ const r = await storage.get('presence-directory', true); dir = r ? JSON.parse(r.value) : {}; }catch(e){ dir = {}; }
-    dir[walletAddress] = { wallet: walletAddress, nickname: myNickname, avatarUri: selectedAvatarUri, hue: myHue, updatedAt: Date.now() };
-    await storage.set('presence-directory', JSON.stringify(dir), true);
-  }catch(e){ /* best-effort */ }
+    const ref = db.ref('presence/' + safeKey(walletAddress));
+    await ref.set({ wallet: walletAddress, nickname: myNickname, avatarUri: selectedAvatarUri, hue: myHue, updatedAt: firebase.database.ServerValue.TIMESTAMP });
+    ref.onDisconnect().remove();
+  }catch(e){ console.warn('[Tezchat] presence write failed', e); }
 }
-async function pollPresence(){
-  try{
-    const r = await storage.get('presence-directory', true);
-    const dir = r ? JSON.parse(r.value) : {};
+/* Subscribes to the whole presence/ node so every add/remove/update from
+   anyone (including onDisconnect cleanups) arrives instantly — no polling. */
+function subscribePresence(){
+  if(!firebaseReady) return;
+  presenceRef = db.ref('presence');
+  presenceRef.on('value', snap => {
+    const dir = snap.val() || {};
     const now = Date.now();
     const live = {};
-    Object.keys(dir).forEach(w=>{ if(now - (dir[w].updatedAt||0) < STALE_MS) live[w] = dir[w]; });
+    Object.keys(dir).forEach(k=>{ if(now - (dir[k].updatedAt||0) < PRESENCE_STALE_MS) live[dir[k].wallet || k] = dir[k]; });
     if(!live[walletAddress]) live[walletAddress] = { wallet: walletAddress, nickname: myNickname, avatarUri: selectedAvatarUri, hue: myHue, updatedAt: now };
     syncAvatarNodes(live);
-  }catch(e){
-    // no directory yet — just show ourselves
-    syncAvatarNodes({ [walletAddress]: { wallet: walletAddress, nickname: myNickname, avatarUri: selectedAvatarUri, hue: myHue, updatedAt: Date.now() } });
-  }
+  }, err => console.warn('[Tezchat] presence listener error', err));
+}
+function unsubscribePresence(){
+  if(presenceRef){ presenceRef.off(); presenceRef = null; }
 }
 function syncAvatarNodes(live){
   peopleCache = live;
@@ -753,19 +780,21 @@ function animateAvatars(){
 function startLoops(){
   stopLoops();
   touchPresence();
-  pollPresence();
-  presenceLoopId = setInterval(pollPresence, PRESENCE_POLL_MS);
+  subscribePresence();
   heartbeatLoopId = setInterval(touchPresence, HEARTBEAT_MS);
   animLoopId = requestAnimationFrame(animateAvatars);
 }
 function stopLoops(){
-  if(presenceLoopId) clearInterval(presenceLoopId);
+  unsubscribePresence();
   if(heartbeatLoopId) clearInterval(heartbeatLoopId);
   if(animLoopId) cancelAnimationFrame(animLoopId);
-  presenceLoopId = heartbeatLoopId = animLoopId = null;
+  heartbeatLoopId = animLoopId = null;
 }
 
-/* ---------------- chat ---------------- */
+/* ---------------- chat (Firebase Realtime Database) ----------------
+   Each message is its own pushed node under chats/{pairKey}/ — no
+   read-modify-write, so two people typing at once can never clobber each
+   other. child_added fires instantly for both sides, no polling needed. */
 window.openChat = async function(targetWallet){
   currentChatWith = targetWallet;
   const person = peopleCache[targetWallet] || { wallet: targetWallet, nickname:'', avatarUri:null, hue: hueFor(targetWallet) };
@@ -784,28 +813,39 @@ window.openChat = async function(targetWallet){
     document.getElementById('chatBody').innerHTML = '<div class="self-note">This is your own identity disc. Double-click someone else&#39;s to open a channel with them.</div>';
     return;
   }
+  if(!firebaseReady){
+    document.getElementById('chatBody').innerHTML = '<div class="self-note">Chat needs Firebase configured — see setup steps. Running local-only right now.</div>';
+    document.getElementById('chatInputRow').style.display = 'none';
+    return;
+  }
 
-  await loadChat();
-  if(chatPollId) clearInterval(chatPollId);
-  chatPollId = setInterval(loadChat, CHAT_POLL_MS);
+  subscribeChat(pairKey(walletAddress, targetWallet));
   document.getElementById('chatInput').focus();
 };
 window.closeChat = function(){
   document.getElementById('chatOverlay').classList.remove('open');
   currentChatWith = null;
-  if(chatPollId){ clearInterval(chatPollId); chatPollId = null; }
+  unsubscribeChat();
 };
-async function loadChat(){
-  if(!currentChatWith) return;
-  const key = pairKey(walletAddress, currentChatWith);
-  let data = { messages: [] };
-  try{ const r = await storage.get(key, true); data = r ? JSON.parse(r.value) : { messages: [] }; }catch(e){ data = { messages: [] }; }
-  renderChat(data.messages || []);
+let chatMessages = [];
+function subscribeChat(key){
+  unsubscribeChat();
+  chatMessages = [];
+  document.getElementById('chatBody').innerHTML = '<div class="chat-empty">Loading…</div>';
+  currentChatRef = db.ref('chats/' + key).limitToLast(300);
+  currentChatRef.on('child_added', snap => {
+    chatMessages.push(snap.val());
+    renderChat(chatMessages);
+  }, err => console.warn('[Tezchat] chat listener error', err));
+}
+function unsubscribeChat(){
+  if(currentChatRef){ currentChatRef.off(); currentChatRef = null; }
+  chatMessages = [];
 }
 function renderChat(messages){
   const body = document.getElementById('chatBody');
   const wasAtBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 40;
-  if(!messages.length){ body.innerHTML = '<div class="chat-empty">No messages yet. Say hello across the Grid.</div>'; return; }
+  if(!messages.length){ body.innerHTML = '<div class="chat-empty">No messages yet. Say hello on Tezchat.</div>'; return; }
   body.innerHTML = messages.map(m=>{
     const mine = m.from === walletAddress;
     const time = new Date(m.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
@@ -816,37 +856,29 @@ function renderChat(messages){
 window.sendChat = async function(){
   const input = document.getElementById('chatInput');
   const text = input.value.trim();
-  if(!text || !currentChatWith) return;
+  if(!text || !currentChatWith || !firebaseReady) return;
   input.value = '';
   const key = pairKey(walletAddress, currentChatWith);
   try{
-    let data = { messages: [] };
-    try{ const r = await storage.get(key, true); data = r ? JSON.parse(r.value) : { messages: [] }; }catch(e){}
-    data.messages = data.messages || [];
-    data.messages.push({ from: walletAddress, text: text.slice(0,500), ts: Date.now() });
-    if(data.messages.length > 300) data.messages = data.messages.slice(-300);
-    await storage.set(key, JSON.stringify(data), true);
-    renderChat(data.messages);
+    await db.ref('chats/' + key).push({ from: walletAddress, text: text.slice(0,500), ts: Date.now() });
   }catch(e){ showToast('Message failed to send.'); }
 };
 document.getElementById('chatInput').addEventListener('keydown', e=>{ if(e.key==='Enter') sendChat(); });
 document.getElementById('chatOverlay').addEventListener('mousedown', e=>{ if(e.target.id==='chatOverlay') closeChat(); });
 
-/* ---------------- boot: resume session if we have one ---------------- */
+/* ---------------- boot: auto-reconnect if the wallet already granted permission ----------------
+   Beacon's own SDK persists your granted permission in the browser, so if
+   you refresh the page after connecting via Temple/AirGap, we can silently
+   resume rather than making you click Connect again. Manual-address and
+   Kukai sessions aren't auto-restored — you'll just reconnect, which is
+   normal dApp behavior. Your nickname/avatar always come back correctly
+   either way, since those live in Firebase under your wallet address. */
 (async function boot(){
   try{
-    const r = await storage.get('my-profile', false);
-    if(r){
-      const p = JSON.parse(r.value);
-      if(p && p.wallet){
-        walletAddress = p.wallet; myNickname = p.nickname || ''; selectedAvatarUri = p.avatarUri || null; myHue = hueFor(p.wallet);
-        connectionSource = 'restored';
-        document.getElementById('lobbyWalletChip').textContent = short(walletAddress);
-        showScreen('screen-lobby');
-        startLoops();
-      }
-    }
-  }catch(e){ /* no saved session */ }
+    if(typeof beacon === 'undefined') return;
+    const acc = await getDApp().getActiveAccount();
+    if(acc?.address) await onConnected(acc.address, 'beacon');
+  }catch(e){ /* no persisted wallet session — show the connect screen */ }
 })();
 </script>
 </body>
